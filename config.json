@@ -1,0 +1,24 @@
+{
+  "api_keys": {
+    "7b4de007cc95e5d28111b0ce41fc903939184920498c3ea51edd74e03a33b616": {
+      "id": "7b4de007",
+      "key": "nemapi-tokenQwcSdP00B2Hip8TkKyhi9C4fPPXkmnk4",
+      "name": "default",
+      "created_at": "2026-09-05 11:58:37"
+    }
+  },
+  "settings": {
+    "stream_enabled": true,
+    "auto_config": true,
+    "fresh_chat": true,
+    "premium_md": true,
+    "timeout_seconds": 230
+  },
+  "subscription": {
+    "plan": "free"
+  },
+  "backend": {
+    "url": "https://script.google.com/macros/s/AKfycbyzPVFdZg3-xy_HTWONNDJUQ4cAstDN6qhsx39RNn5iusSWKBXW2OurSsVwcXWNAYUJ7A/exec",
+    "user": ""
+  }
+}

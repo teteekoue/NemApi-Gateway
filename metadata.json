@@ -1,0 +1,6 @@
+{
+  "name": "NemApi",
+  "description": "Passerelle locale OpenAI-compatible pour DeepSeek, Qwen, Claude, Gemini, ChatGPT, Kimi et Z.ai",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

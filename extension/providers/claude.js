@@ -1,0 +1,254 @@
+/**
+ * NemApi - Claude adapter
+ * Primary strategy: same path as the native Copy button (clipboard intercept).
+ * Fallback: full turn DOM with every <pre><code> preserved.
+ */
+(function (global) {
+  "use strict";
+  const B = global.NemApiBase;
+
+  const INPUT = [
+    'div[contenteditable="true"][role="textbox"]',
+    'div.ProseMirror[contenteditable="true"]',
+    'div[contenteditable="true"].ProseMirror',
+    '[data-testid="chat-input"]',
+    'div[contenteditable="true"]',
+  ];
+
+  const SEND = [
+    'button[aria-label*="Send message" i]',
+    'button[aria-label*="Send" i]',
+    'button[data-testid="send-button"]',
+    'button[type="submit"]',
+    '[role="button"][aria-label*="Send" i]',
+  ];
+
+  function findInput() {
+    return B.queryFirst(INPUT);
+  }
+
+  function findSend() {
+    const root = B.findComposerRoot();
+    for (const s of SEND) {
+      const nodes = root.querySelectorAll(s);
+      for (const el of nodes) {
+        if (!el || !B.isVisible(el)) continue;
+        if (B.isDisabled && B.isDisabled(el)) continue;
+        if (el.disabled || el.getAttribute("aria-disabled") === "true") continue;
+        const label = `${el.getAttribute("aria-label") || ""} ${el.title || ""}`.toLowerCase();
+        if (/stop|cancel|attach|upload|file/.test(label)) continue;
+        return el;
+      }
+    }
+    return B.findByText(["button", "[role='button']"], [/send/i, /submit/i], root);
+  }
+
+  function getLastAssistantRoot() {
+    const copyBtns = document.querySelectorAll('button[data-testid="action-bar-copy"]');
+    if (copyBtns.length) {
+      const btn = copyBtns[copyBtns.length - 1];
+      let el = btn.parentElement;
+      for (let d = 0; d < 15 && el; d++) {
+        const hasBody = el.querySelector(
+          ".standard-markdown, [class*='prose'], [class*='markdown'], pre, code, p"
+        );
+        const len = (el.innerText || "").length;
+        if (hasBody && len > 30) return el;
+        el = el.parentElement;
+      }
+    }
+    const done = document.querySelectorAll('[data-is-streaming="false"]');
+    if (done.length) return done[done.length - 1];
+    const md = document.querySelectorAll(".standard-markdown, [class*='font-claude-message']");
+    if (md.length) return md[md.length - 1];
+    return null;
+  }
+
+  function findCopyButton(root) {
+    if (!root) root = document;
+    let btn = root.querySelector('button[data-testid="action-bar-copy"]');
+    if (btn) return btn;
+    let el = root;
+    for (let i = 0; i < 8 && el; i++) {
+      btn = el.querySelector('button[data-testid="action-bar-copy"]');
+      if (btn) return btn;
+      const group = el.querySelector('[role="group"][aria-label="Message actions"]');
+      if (group) {
+        btn = group.querySelector('button[data-testid="action-bar-copy"]');
+        if (btn) return btn;
+      }
+      el = el.parentElement;
+    }
+    const all = document.querySelectorAll('button[data-testid="action-bar-copy"]');
+    return all.length ? all[all.length - 1] : null;
+  }
+
+  function extractFromDom(root) {
+    if (!root) return "";
+    const clone = root.cloneNode(true);
+    clone
+      .querySelectorAll(
+        "button,[role='button'],[class*='copy'],[class*='toolbar'],[class*='action-bar'],svg,style,script"
+      )
+      .forEach((n) => n.remove());
+
+    const codeBlocks = [];
+    root.querySelectorAll("pre").forEach((pre) => {
+      const code = pre.querySelector("code");
+      let lang = "";
+      if (code) {
+        const cls = code.className || "";
+        const m = cls.match(/language-([a-z0-9_+-]+)/i) || cls.match(/lang-([a-z0-9_+-]+)/i);
+        if (m) lang = m[1];
+      }
+      const body = ((code ? code.textContent : pre.textContent) || "")
+        .replace(/\u00a0/g, " ")
+        .replace(/\n$/, "");
+      if (body.trim()) codeBlocks.push({ lang, body, pre });
+    });
+
+    const clonePres = clone.querySelectorAll("pre");
+    clonePres.forEach((pre, i) => {
+      const ph = document.createTextNode("\n\n@@CODE" + i + "@@\n\n");
+      if (pre.parentNode) pre.parentNode.replaceChild(ph, pre);
+    });
+
+    const mdBody =
+      clone.querySelector(".standard-markdown, [class*='prose'], [class*='markdown']") || clone;
+    let md = B.htmlToMarkdown ? B.htmlToMarkdown(mdBody) : mdBody.textContent || "";
+
+    codeBlocks.forEach((c, i) => {
+      const fence = "```" + c.lang + "\n" + c.body + "\n```";
+      if (md.indexOf("@@CODE" + i + "@@") >= 0) {
+        md = md.split("@@CODE" + i + "@@").join(fence);
+      } else if (!md.includes(c.body.slice(0, Math.min(40, c.body.length)))) {
+        md += "\n\n" + fence;
+      }
+    });
+
+    md = md.replace(/@@CODE\d+@@/g, "");
+    return md.trim() || (root.innerText || "").trim();
+  }
+
+  function getLastResponse() {
+    const root = getLastAssistantRoot();
+    if (!root) return "";
+    return extractFromDom(root);
+  }
+
+  function isGenerating() {
+    return !!(
+      document.querySelector('[data-is-streaming="true"]') ||
+      document.querySelector('button[aria-label*="Stop" i]')
+    );
+  }
+
+  async function sendPrompt(text) {
+    const input =
+      findInput() ||
+      (await B.waitFor('div.ProseMirror[contenteditable="true"]', 12000).catch(() => null));
+    if (!input) throw new Error("Claude: input not found");
+    try {
+      input.focus();
+      input.click();
+    } catch (_) {}
+    B.pasteText(input, text);
+    await B.sleep(220);
+    let btn = B.waitForEnabledSend
+      ? await B.waitForEnabledSend(findSend, 3500)
+      : findSend();
+    if (btn && !(B.isDisabled && B.isDisabled(btn))) {
+      try {
+        btn.focus();
+      } catch (_) {}
+      if (B.clickEl(btn)) {
+        await B.sleep(300);
+        return;
+      }
+    }
+    B.pressEnter(input);
+    await B.sleep(200);
+    btn = findSend();
+    if (btn && !(B.isDisabled && B.isDisabled(btn))) B.clickEl(btn);
+  }
+
+  async function extractPremium() {
+    const root = getLastAssistantRoot();
+    if (!root) return getLastResponse();
+    const fromDom = extractFromDom(root);
+    if (!B.premiumEnabled()) return fromDom;
+    const copyBtn = findCopyButton(root);
+    const copyRoot = copyBtn
+      ? copyBtn.closest('[role="group"]') || copyBtn.parentElement || root
+      : root;
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const fromClip = await B.tryClipboardFromCopyButton(
+        copyRoot,
+        [
+          'button[data-testid="action-bar-copy"]',
+          'button[aria-label*="Copy" i]',
+        ],
+        { domAssistantText: fromDom }
+      );
+      if (fromClip && fromClip.length > 10) {
+        const clipFences = (fromClip.match(/```/g) || []).length;
+        const domFences = (fromDom.match(/```/g) || []).length;
+        if (clipFences >= domFences || fromClip.length >= fromDom.length * 0.9) {
+          return fromClip.trim();
+        }
+        if (domFences > clipFences) return fromDom;
+        return fromClip.trim();
+      }
+      await B.sleep(150);
+    }
+    const react = B.extractReactMarkdown(root);
+    if (react && react.length > Math.max(30, fromDom.length * 0.85)) {
+      return react.trim();
+    }
+    return fromDom || getLastResponse();
+  }
+
+  async function waitForResponse(previous = "") {
+    await B.sleep(1000);
+    await B.waitUntilStable(
+      () => {
+        if (isGenerating() && !getLastResponse()) return "";
+        return getLastResponse();
+      },
+      { timeout: 180000, stableMs: 2500, previous }
+    );
+    await B.sleep(300);
+    try {
+      return await extractPremium();
+    } catch (_) {
+      return getLastResponse();
+    }
+  }
+
+  function getResponseCount() {
+    try {
+      const copies = document.querySelectorAll('button[data-testid="action-bar-copy"]');
+      if (copies.length) return copies.length;
+      const done = document.querySelectorAll('[data-is-streaming="false"]');
+      if (done.length) return done.length;
+      return document.querySelectorAll(
+        ".standard-markdown, [class*='font-claude-message']"
+      ).length;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  global.NemApiProviders = global.NemApiProviders || {};
+  global.NemApiProviders.claude = {
+    id: "claude",
+    match: (url) => /claude\.ai/i.test(url),
+    sendPrompt,
+    waitForResponse,
+    getLastResponse,
+    getResponseCount,
+    isGenerating,
+    findInput,
+  };
+})(typeof window !== "undefined" ? window : self);

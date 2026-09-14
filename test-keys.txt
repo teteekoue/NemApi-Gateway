@@ -1,0 +1,15 @@
+CLÉS DE PRODUIT NEMAPI v4.0.1
+===============================
+Format : 16 caractères alphanumériques
+- PA... = Premium Annuel (10 $/an)
+- PL... = Premium À vie (99 $)
+
+Premium ANNUEL :
+  PAC8GVLYHPAG7XBL
+  PAYPCWVLRRSEAGBK
+
+Premium À VIE :
+  PLB6X2VUTCXT3SXZ
+  PLY75BLMFE59B8BU
+
+(Clés générées pour tests et validation)
